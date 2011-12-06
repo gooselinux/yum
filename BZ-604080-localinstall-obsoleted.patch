@@ -1,0 +1,73 @@
+commit 91b735bce6aeb1f0fbcc051cbca70ee65a983f63
+Author: Seth Vidal <skvidal@fedoraproject.org>
+Date:   Tue Jun 15 13:33:07 2010 -0400
+
+    when doing a localinstall check to see if the pkg we want to install is obsoleted by something already installed
+    not just those things in the repos.
+
+diff --git a/yum/__init__.py b/yum/__init__.py
+index 1d7637f..2db03ae 100644
+--- a/yum/__init__.py
++++ b/yum/__init__.py
+@@ -3698,6 +3698,11 @@ class YumBase(depsolve.Depsolve):
+             self.logger.critical(_('Cannot add package %s to transaction. Not a compatible architecture: %s'), pkg, po.arch)
+             return tx_return
+         
++        obsoleters = po.obsoletedBy(self.rpmdb.searchObsoletes(po.name))
++        if obsoleters:
++            self.logger.critical(_('Cannot install package %s. It is obsoleted by installed package %s'), po, obsoleters[0])
++            return tx_return
++            
+         # everything installed that matches the name
+         installedByKey = self.rpmdb.searchNevra(name=po.name)
+         # go through each package
+commit 0e5e89c155be58ad5163f48dbf4bf05d3cc30336
+Author: Seth Vidal <skvidal@fedoraproject.org>
+Date:   Tue Jun 15 13:48:03 2010 -0400
+
+    add 'if self.conf.obsoletes' to the installed-pkg obsoletes check for localinstall
+
+diff --git a/yum/__init__.py b/yum/__init__.py
+index 2db03ae..5bc97be 100644
+--- a/yum/__init__.py
++++ b/yum/__init__.py
+@@ -3698,10 +3698,11 @@ class YumBase(depsolve.Depsolve):
+             self.logger.critical(_('Cannot add package %s to transaction. Not a compatible architecture: %s'), pkg, po.arch)
+             return tx_return
+         
+-        obsoleters = po.obsoletedBy(self.rpmdb.searchObsoletes(po.name))
+-        if obsoleters:
+-            self.logger.critical(_('Cannot install package %s. It is obsoleted by installed package %s'), po, obsoleters[0])
+-            return tx_return
++        if self.conf.obsoletes:
++            obsoleters = po.obsoletedBy(self.rpmdb.searchObsoletes(po.name))
++            if obsoleters:
++                self.logger.critical(_('Cannot install package %s. It is obsoleted by installed package %s'), po, obsoleters[0])
++                return tx_return
+             
+         # everything installed that matches the name
+         installedByKey = self.rpmdb.searchNevra(name=po.name)
+diff -ru yum-3.2.27-orig/yum/packages.py yum-3.2.27/yum/packages.py
+--- yum-3.2.27-orig/yum/packages.py	2010-03-11 09:22:07.000000000 -0500
++++ yum-3.2.27/yum/packages.py	2010-06-16 10:45:26.000000000 -0400
+@@ -538,6 +538,19 @@
+ 
+     base_package_name = property(fget=lambda self: self._getBaseName())
+ 
++    def obsoletedBy(self, obsoleters, limit=0):
++        """ Returns list of obsoleters that obsolete this package. Note that we
++            don't do obsoleting loops. If limit is != 0, then we stop after
++            finding that many. """
++        provtup = (self.name, 'EQ', (self.epoch, self.version, self.release))
++        ret = []
++        for obspo in obsoleters:
++            if obspo.inPrcoRange('obsoletes', provtup):
++                ret.append(obspo)
++                if limit and len(ret) > limit:
++                    break
++        return ret
++
+ 
+ class PackageEVR:
+ 
+Only in yum-3.2.27/yum: packages.py~

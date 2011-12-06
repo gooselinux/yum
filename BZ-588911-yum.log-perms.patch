@@ -1,0 +1,26 @@
+commit b3be8de9105015e2e321816906c312d98a38e6e6
+Author: Seth Vidal <skvidal@fedoraproject.org>
+Date:   Fri Apr 30 14:36:25 2010 -0400
+
+    if the log file doesn't exist when we startup make sure we set
+    the perms for it to 0600.
+    close rh bug https://bugzilla.redhat.com/show_bug.cgi?id=552549
+
+diff --git a/yum/logginglevels.py b/yum/logginglevels.py
+index 1ab11db..2002140 100644
+--- a/yum/logginglevels.py
++++ b/yum/logginglevels.py
+@@ -192,7 +192,12 @@ def setFileLog(uid, logfile):
+             logdir = os.path.dirname(logfile)
+             if not os.path.exists(logdir):
+                 os.makedirs(logdir, mode=0755)
+-
++            
++            if not os.path.exists(logfile):
++                f = open(logfile, 'w')
++                os.chmod(logfile, 0600) # making sure umask doesn't catch us up
++                f.close()
++                
+             filelogger = logging.getLogger("yum.filelogging")
+             filehandler = logging.FileHandler(logfile)
+             formatter = logging.Formatter("%(asctime)s %(message)s",

@@ -1,0 +1,39 @@
+commit 344300ab4588a20ad0624c2d6610f1a313358661
+Author: James Antill <james@and.org>
+Date:   Wed Jun 9 12:56:44 2010 -0400
+
+    Add *verifytrans plugin hooks, so yumdb can be altered from plugins. BZ 602354.
+
+diff --git a/yum/__init__.py b/yum/__init__.py
+index 70294ba..fa26e62 100644
+--- a/yum/__init__.py
++++ b/yum/__init__.py
+@@ -1381,6 +1381,7 @@ class YumBase(depsolve.Depsolve):
+         # and the install reason
+ 
+         self.rpmdb.dropCachedData()
++        self.plugins.run('preverifytrans')
+         for txmbr in self.tsInfo:
+             if txmbr.output_state in TS_INSTALL_STATES:
+                 if not self.rpmdb.contains(po=txmbr.po):
+@@ -1433,6 +1434,7 @@ class YumBase(depsolve.Depsolve):
+             else:
+                 self.verbose_logger.log(logginglevels.DEBUG_2, 'What is this? %s' % txmbr.po)
+ 
++        self.plugins.run('postverifytrans')
+         if self.conf.history_record:
+             ret = -1
+             if resultobject is not None:
+diff --git a/yum/plugins.py b/yum/plugins.py
+index 9968614..c8ed4ab 100644
+--- a/yum/plugins.py
++++ b/yum/plugins.py
+@@ -89,6 +89,8 @@ SLOT_TO_CONDUIT = {
+     'clean': 'PluginConduit',
+     'pretrans': 'MainPluginConduit',
+     'posttrans': 'MainPluginConduit',
++    'preverifytrans': 'MainPluginConduit',
++    'postverifytrans': 'MainPluginConduit',
+     'exclude': 'MainPluginConduit',
+     'preresolve': 'DepsolvePluginConduit',
+     'postresolve': 'DepsolvePluginConduit',

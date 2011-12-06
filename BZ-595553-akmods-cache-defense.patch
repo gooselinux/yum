@@ -1,0 +1,135 @@
+commit a9140a46c780f8b132d955b6393f97bf153caffe
+Author: James Antill <james@and.org>
+Date:   Thu May 13 16:20:04 2010 -0400
+
+     Be more paranoid about saving the rpmdb version, it's possible PK could
+    be doing somethign weird here ... like loading data, hanging around as
+    user does something in yum (which alters the rpmdb) and then somehow PK
+    saves the rpmdb version.
+     I can't see how it's possible though, but two extra stats. for a little
+    more paranoia doesn't seem out of place.
+
+diff --git a/yum/rpmsack.py b/yum/rpmsack.py
+index 1c8bcd5..d6bd5c9 100644
+--- a/yum/rpmsack.py
++++ b/yum/rpmsack.py
+@@ -184,6 +184,7 @@ class RPMDBPackageSack(PackageSackBase):
+         self.auto_close = False # this forces a self.ts.close() after
+                                      # most operations so it doesn't leave
+                                      # any lingering locks.
++        self._cached_rpmdb_mtime = None
+ 
+         self._cache = {
+             'provides' : { },
+@@ -230,6 +231,8 @@ class RPMDBPackageSack(PackageSackBase):
+             }
+         self._have_cached_rpmdbv_data = None
+         self._cached_conflicts_data = None
++        self.transactionReset() # Should do nothing, but meh...
++        self._cached_rpmdb_mtime = None
+ 
+     def setCacheDir(self, cachedir):
+         """ Sets the internal cachedir value for the rpmdb, to be the
+@@ -861,6 +864,19 @@ class RPMDBPackageSack(PackageSackBase):
+         if not self.__cache_rpmdb__:
+             return
+ 
++        if self._cached_rpmdb_mtime is None:
++            return # We haven't loaded any packages!!!
++
++        rpmdbfname  = self.root + "/var/lib/rpm/Packages"
++        if not os.path.exists(rpmdbfname):
++            return # haha
++
++        _cached_rpmdb_mtime = os.path.getmtime(rpmdbfname)
++        if self._cached_rpmdb_mtime != _cached_rpmdb_mtime:
++            #  Something altered the rpmdb since we loaded our first package,
++            # so don't save the rpmdb version as who knows what happened.
++            return
++
+         rpmdbvfname = self._cachedir + "/version"
+         if not os.access(self._cachedir, os.W_OK):
+             if os.path.exists(self._cachedir):
+@@ -1073,6 +1089,10 @@ class RPMDBPackageSack(PackageSackBase):
+         self._idx2pkg[index] = po
+         self._name2pkg.setdefault(po.name, []).append(po)
+         self._tup2pkg[po.pkgtup] = po
++        if self.__cache_rpmdb__ and self._cached_rpmdb_mtime is None:
++            rpmdbfname  = self.root + "/var/lib/rpm/Packages"
++            self._cached_rpmdb_mtime = os.path.getmtime(rpmdbfname)
++
+         return po
+         
+     def _hdr2pkgTuple(self, hdr):
+commit d26c78e7ed4fb564e2bb7e709d8847d27cd82389
+Author: James Antill <james@and.org>
+Date:   Thu May 13 17:47:00 2010 -0400
+
+    Deal with bad rpmdb caches better eg. BZ 591382
+
+diff --git a/yum/rpmsack.py b/yum/rpmsack.py
+index d6bd5c9..ef3343a 100644
+--- a/yum/rpmsack.py
++++ b/yum/rpmsack.py
+@@ -518,6 +518,27 @@ class RPMDBPackageSack(PackageSackBase):
+         rpmdbv = self.simpleVersion(main_only=True)[0]
+         self._write_conflicts_new(pkgs, rpmdbv)
+ 
++    def _deal_with_bad_rpmdbcache(self, caller):
++        """ This shouldn't be called, but people are hitting weird stuff so
++            we want to deal with it so it doesn't stay broken "forever". """
++        misc.unlink_f(self._cachedir + "/version")
++        misc.unlink_f(self._cachedir + '/conflicts')
++        misc.unlink_f(self._cachedir + '/file-requires')
++        misc.unlink_f(self._cachedir + '/yumdb-package-checksums')
++        #  We have a couple of options here, we can:
++        #
++        # . Ignore it and continue - least invasive, least likely to get any
++        #   bugs fixed.
++        #
++        # . Ignore it and continue, when not in debug mode - Helps users doing
++        #   weird things (and we won't know), but normal bugs will be seen by
++        #   anyone not running directly from a package.
++        #
++        # . Always throw - but at least it shouldn't happen again.
++        #
++        if __debug__:
++            raise Errors.PackageSackError, 'Rpmdb checksum is invalid: %s' % caller
++
+     def _read_conflicts(self):
+         if not self.__cache_rpmdb__:
+             return None
+@@ -550,6 +571,7 @@ class RPMDBPackageSack(PackageSackBase):
+             if fo.readline() != '': # Should be EOF
+                 return None
+         except ValueError:
++            self._deal_with_bad_rpmdbcache("conflicts")
+             return None
+ 
+         self._cached_conflicts_data = ret
+@@ -663,6 +685,7 @@ class RPMDBPackageSack(PackageSackBase):
+             if fo.readline() != '': # Should be EOF
+                 return None, None
+         except ValueError:
++            self._deal_with_bad_rpmdbcache("file requires")
+             return None, None
+ 
+         return iFR, iFP
+@@ -800,11 +823,16 @@ class RPMDBPackageSack(PackageSackBase):
+             if fo.readline() != '': # Should be EOF
+                 return
+         except ValueError:
++            self._deal_with_bad_rpmdbcache("pkg checksums")
+             return
+ 
+         for pkgtup in checksum_data:
+             (n, a, e, v, r) = pkgtup
+-            pkg = self.searchNevra(n, e, v, r, a)[0]
++            pkg = self.searchNevra(n, e, v, r, a)
++            if not pkg:
++                self._deal_with_bad_rpmdbcache("pkg checksums")
++                continue
++            pkg = pkg[0]
+             (T, D) = checksum_data[pkgtup]
+             if ('checksum_type' in pkg.yumdb_info._read_cached_data or
+                 'checksum_data' in pkg.yumdb_info._read_cached_data):

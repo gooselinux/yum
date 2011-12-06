@@ -1,0 +1,20 @@
+commit f9b8420f54162289d79e5c8b84291057758a609f
+Author: James Antill <james@and.org>
+Date:   Thu Apr 15 15:11:32 2010 -0400
+
+    Add nocontexts to possible ts flag usage, when available
+
+diff --git a/yum/depsolve.py b/yum/depsolve.py
+index 8b02d7c..e62680f 100644
+--- a/yum/depsolve.py
++++ b/yum/depsolve.py
+@@ -138,6 +138,9 @@ class Depsolve(object):
+                             'test': rpm.RPMTRANS_FLAG_TEST,
+                             'justdb': rpm.RPMTRANS_FLAG_JUSTDB,
+                             'repackage': rpm.RPMTRANS_FLAG_REPACKAGE}
++        # This is only in newer rpm.org releases
++        if hasattr(rpm, 'RPMTRANS_FLAG_NOCONTEXTS'):
++            ts_flags_to_rpm['nocontexts'] = rpm.RPMTRANS_FLAG_NOCONTEXTS
+         
+         self._ts.setFlags(0) # reset everything.
+         

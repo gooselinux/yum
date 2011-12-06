@@ -1,0 +1,93 @@
+commit f48b1d9f0ede0eae518f5b353ed9dda74dde6d7c
+Author: Seth Vidal <skvidal@fedoraproject.org>
+Date:   Fri Apr 30 12:16:54 2010 -0400
+
+    make sure we're not prepending a path which is already been prepended
+    with the installroot
+    fixes rh bugs:
+    https://bugzilla.redhat.com/show_bug.cgi?id=577627
+    and
+    https://bugzilla.redhat.com/show_bug.cgi?id=560078
+
+diff --git a/yum/rpmsack.py b/yum/rpmsack.py
+index 83268cc..6a40939 100644
+--- a/yum/rpmsack.py
++++ b/yum/rpmsack.py
+@@ -171,7 +171,10 @@ class RPMDBPackageSack(PackageSackBase):
+         if cachedir is None:
+             cachedir = misc.getCacheDir()
+         self.setCacheDir(cachedir)
+-        self._persistdir = root +  '/' + persistdir
++        if not os.path.normpath(persistdir).startswith(self.root):
++            self._persistdir = root +  '/' + persistdir
++        else:
++            self._persistdir = persistdir
+         self._have_cached_rpmdbv_data = None
+         self._cached_conflicts_data = None
+         # Store the result of what happens, if a transaction completes.
+@@ -231,7 +234,10 @@ class RPMDBPackageSack(PackageSackBase):
+     def setCacheDir(self, cachedir):
+         """ Sets the internal cachedir value for the rpmdb, to be the
+             "installed" directory from this parent. """
+-        self._cachedir = self.root + '/' + cachedir + "/installed/"
++        if not os.path.normpath(cachedir).startswith(self.root):
++            self._cachedir = self.root + '/' + cachedir + "/installed/"
++        else:
++            self._cachedir = '/' + cachedir + "/installed/"
+ 
+     def readOnlyTS(self):
+         if not self.ts:
+commit 9714379777bfa6569a46ef8d2cc1131b951eebf7
+Author: Seth Vidal <skvidal@fedoraproject.org>
+Date:   Fri Apr 30 12:28:10 2010 -0400
+
+    and do the same for the history db with an --installroot
+
+diff --git a/yum/history.py b/yum/history.py
+index 608f9b7..7e0f399 100644
+--- a/yum/history.py
++++ b/yum/history.py
+@@ -176,7 +176,10 @@ class YumHistory:
+         self._conn = None
+         
+         self.conf = yum.misc.GenericHolder()
+-        self.conf.db_path  = os.path.normpath(root + '/' + db_path)
++        if not os.path.normpath(db_path).startswith(root):
++            self.conf.db_path  = os.path.normpath(root + '/' + db_path)
++        else:
++            self.conf.db_path = os.path.normpath('/' + db_path)
+         self.conf.writable = False
+         self.conf.readable = True
+ 
+commit a079025ebb241849ba734b47607af9eb0c2ae9a3
+Author: James Antill <james@and.org>
+Date:   Wed May 5 02:09:58 2010 -0400
+
+     Work around mock setting mtime on var/lib/Packages, for it's "caches".
+    Somehow the Packages file gets out of sync. with yum's cache/installed
+    in the mock installroot cache, but due to the mtime check we don't see
+    it and thus. blow up.
+     This does mean we'll blow the cache for normal use whenever ctime
+    changes now ... but hopefully that shouldn't be much more often.
+    
+     We are only hitting this now due to the installroot fixes that just
+    went in.
+
+diff --git a/yum/rpmsack.py b/yum/rpmsack.py
+index 6a40939..b457cc9 100644
+--- a/yum/rpmsack.py
++++ b/yum/rpmsack.py
+@@ -847,9 +847,11 @@ class RPMDBPackageSack(PackageSackBase):
+         rpmdbfname  = self.root + "/var/lib/rpm/Packages"
+ 
+         if os.path.exists(rpmdbvfname) and os.path.exists(rpmdbfname):
+-            # See if rpmdb has "changed" ...
++            #  See if rpmdb has "changed" ... NOTE that we need to use ctime
++            # due to mock, because it will save and restore arbitrary rpmdb's
++            # on us and will helpfully reset the mtime!
+             nmtime = os.path.getmtime(rpmdbvfname)
+-            omtime = os.path.getmtime(rpmdbfname)
++            omtime = os.path.getctime(rpmdbfname)
+             if omtime <= nmtime:
+                 rpmdbv = open(rpmdbvfname).readline()[:-1]
+                 self._have_cached_rpmdbv_data  = rpmdbv

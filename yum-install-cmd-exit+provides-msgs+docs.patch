@@ -1,0 +1,167 @@
+From 8e1fa3bca14b0b2ac35f43ba018ca8d49dae3b99 Mon Sep 17 00:00:00 2001
+From: James Antill <james@and.org>
+Date: Thu, 11 Mar 2010 11:47:33 -0500
+Subject: [PATCH 3/5] Add a little more documentation to get_applicable_notices()
+
+---
+ yum/update_md.py |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+diff --git a/yum/update_md.py b/yum/update_md.py
+index 54d4cd7..fc051b0 100644
+--- a/yum/update_md.py
++++ b/yum/update_md.py
+@@ -335,13 +335,15 @@ class UpdateMetadata(object):
+     # has a BZ fix notice. All you can see is the BZ notice for the new "pkg-3"
+     # with the above.
+     #  So now instead you lookup based on the _installed_ pkg.pkgtup, and get
+-    # two notices, in order: [(pkg-3, notice), (pkg-2, notice)]
++    # two notices, in order: [(pkgtup-3, notice), (pkgtup-2, notice)]
+     # the reason for the sorting order is that the first match will give you
+     # the minimum pkg you need to move to.
+     def get_applicable_notices(self, pkgtup):
+         """
+         Retrieve any update notices which are newer than a
+         given std. pkgtup (name, arch, epoch, version, release) tuple.
++        Returns: list of (pkgtup, notice) that are newer than the given pkgtup,
++                 in the order of newest pkgtups first.
+         """
+         oldpkgtup = pkgtup
+         name = oldpkgtup[0]
+-- 
+1.6.6.1
+
+
+From d5c1cc40ec8dac5bab9572478b6da160405b36fc Mon Sep 17 00:00:00 2001
+From: James Antill <james@and.org>
+Date: Thu, 11 Mar 2010 14:47:40 -0500
+Subject: [PATCH 4/5]  Return an error code if yum can't install any of the specified packages
+
+ People want a bash scriptable way to say "X should be installed". So
+with this patch:
+
+. If _any_ package specified: is installed already; or is found and will
+be installed == yum returns 0 (or at least goes into depchecking etc.)
+
+. If _all_ package(s) are "not found", yum turns the message "Nothing to do"
+into an error (returns 1, atm).
+
+...thus:
+
+1. yum install -y a b && echo worked
+
+This will echo "worked" if _either_ a or b is installed after yum
+finishes, but tries to install both.
+
+2. yum install a && yum install b && echo worked
+
+This will echo "worked" if both are installed (and if a is not
+available, b will not even try to be installed).
+---
+ cli.py |    6 ++++++
+ 1 files changed, 6 insertions(+), 0 deletions(-)
+
+diff --git a/cli.py b/cli.py
+index a34d205..cebbae3 100644
+--- a/cli.py
++++ b/cli.py
+@@ -595,6 +595,7 @@ class YumBaseCli(yum.YumBase, output.YumOutput):
+         
+         oldcount = len(self.tsInfo)
+         
++        done = False
+         for arg in userlist:
+             if (arg.endswith('.rpm') and (yum.misc.re_remote_url(arg) or
+                                           os.path.exists(arg))):
+@@ -609,8 +610,13 @@ class YumBaseCli(yum.YumBase, output.YumOutput):
+                                         self.term.MODE['bold'], arg,
+                                         self.term.MODE['normal'])
+                 self._maybeYouMeant(arg)
++            else:
++                done = True
+         if len(self.tsInfo) > oldcount:
+             return 2, [_('Package(s) to install')]
++
++        if not done:
++            return 1, [_('Nothing to do')]
+         return 0, [_('Nothing to do')]
+         
+     def updatePkgs(self, userlist, quiet=0):
+-- 
+1.6.6.1
+
+
+From 3008e41f39e21f42e16b3f941c75631bed981a95 Mon Sep 17 00:00:00 2001
+From: James Antill <james@and.org>
+Date: Tue, 16 Mar 2010 17:37:04 -0400
+Subject: [PATCH 5/5] Add the provides data for each pkg, to format_missing_requires. Add relations.
+
+---
+ output.py |   38 +++++++++++++++++++++++++++++++++-----
+ 1 files changed, 33 insertions(+), 5 deletions(-)
+
+diff --git a/output.py b/output.py
+index b09730a..aa5dc4d 100755
+--- a/output.py
++++ b/output.py
+@@ -1660,24 +1660,52 @@ class DepSolveProgressCallBack:
+         if not yb:
+             return msg
+         
++        def _msg_pkg(action, pkg, needname):
++            " Add a package to the message, including any provides matches. "
++            msg = _('\n    %s: %s (%s)') % (action, pkg, pkg.ui_from_repo)
++            needtup = (needname, None, (None, None, None))
++            done = False
++            for pkgtup in pkg.matchingPrcos('provides', needtup):
++                done = True
++                msg += _('\n        %s') % yum.misc.prco_tuple_to_string(pkgtup)
++            if not done:
++                msg += _('\n        Not found')
++            return msg
++
+         ipkgs = set()
+         for pkg in sorted(yb.rpmdb.getProvides(needname)):
+-            ipkgs.add(pkg.pkgtup)
++            nevr = (pkg.name, pkg.epoch, pkg.version, pkg.release)
++            ipkgs.add(nevr)
+             action = _('Installed')
+-            if yb.tsInfo.getMembersWithState(pkg.pkgtup, TS_REMOVE_STATES):
++            rmed = yb.tsInfo.getMembersWithState(pkg.pkgtup, TS_REMOVE_STATES)
++            if rmed:
+                 action = _('Removing')
+-            msg += _('\n    %s: %s (%s)') % (action, pkg, pkg.ui_from_repo)
++            msg += _msg_pkg(action, pkg, needname)
++            # These should be the only three things we care about:
++            relmap = {'updatedby' : _('Updated By'),
++                      'downgradedby' : _('Downgraded By'),
++                      'obsoletedby' :  _('Obsoleted By'),
++                      }
++            for txmbr in rmed:
++                for (rpkg, rtype) in txmbr.relatedto:
++                    if rtype not in relmap:
++                        continue
++                    nevr = (rpkg.name, rpkg.epoch, rpkg.version, rpkg.release)
++                    ipkgs.add(nevr)
++                    msg += _msg_pkg(relmap[rtype], rpkg, needname)
++
+         last = None
+         for pkg in sorted(yb.pkgSack.getProvides(needname)):
+             #  We don't want to see installed packages, or N packages of the
+             # same version, from different repos.
+-            if pkg.pkgtup in ipkgs or pkg.verEQ(last):
++            nevr = (pkg.name, pkg.epoch, pkg.version, pkg.release)
++            if nevr in ipkgs or (pkg.verEQ(last) and pkg.arch == last.arch):
+                 continue
+             last = pkg
+             action = _('Available')
+             if yb.tsInfo.getMembersWithState(pkg.pkgtup, TS_INSTALL_STATES):
+                 action = _('Installing')
+-            msg += _('\n    %s: %s (%s)') % (action, pkg, pkg.repoid)
++            msg += _msg_pkg(action, pkg, needname)
+         return msg
+     
+     def procConflict(self, name, confname):
+-- 
+1.6.6.1
+
