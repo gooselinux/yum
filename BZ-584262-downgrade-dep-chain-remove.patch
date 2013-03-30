@@ -1,0 +1,25 @@
+commit 792737c8caf880c1fa13a1c61f48ed90be72352e
+Author: James Antill <james@and.org>
+Date:   Mon Jun 7 15:59:47 2010 -0400
+
+    Don't do chain removals on downgrades, just fail, BZ 592726.
+
+diff --git a/yum/depsolve.py b/yum/depsolve.py
+index 8c260a7..13d5d31 100644
+--- a/yum/depsolve.py
++++ b/yum/depsolve.py
+@@ -808,6 +808,14 @@ class Depsolve(object):
+ 
+             missing_in_pkg = False
+             for po, dep in thisneeds:
++                if txmbr.downgraded_by: # Don't try to chain remove downgrades
++                    msg = self._err_missing_requires(po, dep)
++                    self.verbose_logger.log(logginglevels.DEBUG_2, msg)
++                    errors.append(msg)
++                    self.po_with_problems.add((po,self._working_po,errors[-1]))
++                    missing_in_pkg = 1
++                    continue
++
+                 (checkdep, missing, errormsgs) = self._processReq(po, dep)
+                 CheckDeps |= checkdep
+                 errors += errormsgs

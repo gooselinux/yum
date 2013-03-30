@@ -1,0 +1,88 @@
+commit 9c3b0e9ae6b86cd96ee8751fc9e131e063724b23
+Author: James Antill <james@and.org>
+Date:   Thu Mar 25 15:57:24 2010 -0400
+
+    Add groupremove_leaf_only option
+
+diff --git a/docs/yum.8 b/docs/yum.8
+index 00bfd53..c6b8c42 100644
+--- a/docs/yum.8
++++ b/docs/yum.8
+@@ -189,6 +189,9 @@ Is used to remove all of the packages in a group, unlike "groupinstall" this
+ will remove everything regardless of group_package_types. It is worth pointing
+ out that packages can be in more than one group, so "groupinstall X Y" followed
+ by "groupremove Y" does not do give you the same result as "groupinstall X".
++
++The groupremove_leaf_only configuration changes the behaviour of this command
++to only remove packages which aren't required by something else.
+ .IP 
+ .IP "\fBgroupinfo\fP"
+ Is used to give the description and package list of a group (and which type
+diff --git a/docs/yum.conf.5 b/docs/yum.conf.5
+index cb6f340..fe195af 100644
+--- a/docs/yum.conf.5
++++ b/docs/yum.conf.5
+@@ -167,6 +167,14 @@ repository will be used. If \fBoverwrite_groups\fR is `0' then the groups
+ from all matching repositories will be merged together as one large group.
+ 
+ .IP
++\fBgroupremove_leaf_only \fR
++Either `0' or `1'. Used to determine yum's behaviour when the groupremove
++command is run.  If \fBgroupremove_leaf_only\fR is `0' (default) then
++all packages in the group will be removed.  If \fBgroupremove_leaf_only\fR is
++`1' then only those packages in the group that aren't required by another
++package will be removed.
++
++.IP
+ \fBenable_group_conditionals\fR
+ Either `0' or `1'. Determines whether yum will allow the use of conditionals
+ packages. Default is `1' (package conditionals are allowed).
+diff --git a/output.py b/output.py
+index 7b09695..452f8a2 100755
+--- a/output.py
++++ b/output.py
+@@ -1642,6 +1642,10 @@ class DepSolveProgressCallBack:
+             _('--> Processing Dependency: %s for package: %s'), formatted_req,
+             po)
+     
++    def groupRemoveReq(self, po, hits):
++        self.verbose_logger.log(logginglevels.INFO_2,
++            _('---> Keeping package: %s'), po)
++
+     def unresolved(self, msg):
+         self.verbose_logger.log(logginglevels.INFO_2, _('--> Unresolved Dependency: %s'),
+             msg)
+diff --git a/yum/config.py b/yum/config.py
+index c82fabc..e51e46f 100644
+--- a/yum/config.py
++++ b/yum/config.py
+@@ -657,6 +657,7 @@ class YumConf(StartupConf):
+     enabled = BoolOption(True)
+     enablegroups = BoolOption(True)
+     enable_group_conditionals = BoolOption(True)
++    groupremove_leaf_only = BoolOption(False)
+     group_package_types = ListOption(['mandatory', 'default'])
+     
+     timeout = FloatOption(30.0) # FIXME: Should use variation of SecondsOption
+diff --git a/yum/depsolve.py b/yum/depsolve.py
+index 11c9f29..f654d84 100644
+--- a/yum/depsolve.py
++++ b/yum/depsolve.py
+@@ -886,6 +886,17 @@ class Depsolve(object):
+             # FIXME: This is probably the best place to fix the postfix rename
+             # problem long term (post .21) ... see compare_providers.
+             for pkg, hits in self.tsInfo.getRequires(*prov).iteritems():
++                # See the docs, this is to make groupremove "more useful".
++                if (self.conf.groupremove_leaf_only and txmbr.groups and
++                    txmbr.output_state == TS_ERASE):
++                    cb = self.dsCallback
++                    if cb and hasattr(cb, 'groupRemoveReq'):
++                        cb.groupRemoveReq(pkg, hits)
++                    #  We don't undo anything else here ... hopefully that's
++                    # fine.
++                    self.tsInfo.remove(txmbr.pkgtup)
++                    return []
++
+                 for hit in hits:
+                     # See if the update solves the problem...
+                     found = False

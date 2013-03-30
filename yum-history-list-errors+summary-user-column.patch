@@ -1,0 +1,52 @@
+commit e364549e86912bd18107867ed349b9049e9cb8cb
+Author: James Antill <james@and.org>
+Date:   Thu Mar 25 11:29:06 2010 -0400
+
+    Show if transactions have error output, in history list
+
+diff --git a/docs/yum.8 b/docs/yum.8
+index ff7ed8f..00bfd53 100644
+--- a/docs/yum.8
++++ b/docs/yum.8
+@@ -289,6 +289,8 @@ if there was something not good with the transaction.
+ .br
+ .I \fB#\fR - The transaction completed, but with a non-zero status.
+ .br
++.I \fBE\fR - The transaction completed fine, but had warning/error output during the transaction.
++.br
+ 
+ .IP
+ .IP "\fBcheck\fP"
+diff --git a/output.py b/output.py
+index aa5dc4d..c4fde7c 100755
+--- a/output.py
++++ b/output.py
+@@ -1310,6 +1310,9 @@ to exit.
+                 rmark = lmark = '*'
+             elif old.return_code:
+                 rmark = lmark = '#'
++                # We don't check .errors, because return_code will be non-0
++            elif old.output:
++                rmark = lmark = 'E'
+             if old.altered_lt_rpmdb:
+                 rmark = '<'
+             if old.altered_gt_rpmdb:
+commit 6f49d3771add390e31c195c1438b035be1caecd6
+Author: James Antill <james@and.org>
+Date:   Thu Mar 25 11:53:51 2010 -0400
+
+    Fix login user column output length, for history summary
+
+diff --git a/output.py b/output.py
+index c4fde7c..7b09695 100755
+--- a/output.py
++++ b/output.py
+@@ -1590,7 +1590,7 @@ to exit.
+                 count, uiacts = self._history_uiactions(hpkgs)
+                 uperiod = _period2user[period]
+                 # Should probably use columns here, esp. for uiacts?
+-                print fmt % (utf8_width_fill(name, 22, 22),
++                print fmt % (utf8_width_fill(name, 26, 26),
+                              utf8_width_fill(uperiod, 19, 19),
+                              utf8_width_fill(uiacts, 16, 16), count)
+ 

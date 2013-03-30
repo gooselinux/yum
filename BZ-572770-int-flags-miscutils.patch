@@ -1,0 +1,38 @@
+commit 7032e7d9a3ebb6573b180a55ec049e822a212720
+Author: Tim Lauridsen <timlau@fedoraproject.org>
+Date:   Fri Apr 30 18:17:33 2010 +0200
+
+    Make sure we have and int flag + added docstrings (rhbz #572770)
+
+diff --git a/rpmUtils/miscutils.py b/rpmUtils/miscutils.py
+index b5f3566..8e46541 100644
+--- a/rpmUtils/miscutils.py
++++ b/rpmUtils/miscutils.py
+@@ -341,11 +341,17 @@ def rpm2cpio(fdno, out=sys.stdout, bufsize=2048):
+         if tmp == "": break
+         out.write(tmp)
+     f.close()
+-                                                                                
++                 
+ def formatRequire (name, version, flags):
++    '''
++    Return a human readable requirement string (ex.  foobar >= 2.0)
++    @param name: requirement name (ex. foobar)
++    @param version: requirent version (ex. 2.0)
++    @param flags: binary flags ( 0010 = equal, 0100 = greater than, 1000 = less than )
++    '''
+     s = name
+     
+-    if flags:
++    if flags and type(flags) == type(0): # Flag must be set and a int
+         if flags & (rpm.RPMSENSE_LESS | rpm.RPMSENSE_GREATER |
+                     rpm.RPMSENSE_EQUAL):
+             s = s + " "
+@@ -358,6 +364,7 @@ def formatRequire (name, version, flags):
+             if version:
+                 s = "%s %s" %(s, version)
+     return s
++
+     
+ def flagToString(flags):
+     flags = flags & 0xf

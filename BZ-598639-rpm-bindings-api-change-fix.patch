@@ -1,0 +1,22 @@
+commit a810a19804630b62620a9a943847fde34839e54d
+Author: Seth Vidal <skvidal@fedoraproject.org>
+Date:   Tue Jun 1 13:13:01 2010 -0400
+
+    in python 3k (and in the new rpm-python bindings) rpm is returning flags as LONGS not INTS - so this code breaks w/o
+    this fix.
+    
+    most importantly it breaks mock
+
+diff --git a/rpmUtils/miscutils.py b/rpmUtils/miscutils.py
+index 8e46541..b1631ae 100644
+--- a/rpmUtils/miscutils.py
++++ b/rpmUtils/miscutils.py
+@@ -351,7 +351,7 @@ def formatRequire (name, version, flags):
+     '''
+     s = name
+     
+-    if flags and type(flags) == type(0): # Flag must be set and a int
++    if flags and (type(flags) == type(0) or type(flags) == type(0L)): # Flag must be set and a int (or a long, now)
+         if flags & (rpm.RPMSENSE_LESS | rpm.RPMSENSE_GREATER |
+                     rpm.RPMSENSE_EQUAL):
+             s = s + " "

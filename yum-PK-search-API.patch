@@ -1,0 +1,39 @@
+commit 11dfde5e065e21c5bdb25a087501b90afe0b0dab
+Author: Seth Vidal <skvidal@fedoraproject.org>
+Date:   Tue Mar 23 10:09:20 2010 -0400
+
+    make sure we aren't overwriting the value of 'keys'
+    
+    this determines how many args we pass back in our yielded results
+    never noticed it b/c nothing in yum uses keys=True - but it broke PK
+
+diff --git a/yum/__init__.py b/yum/__init__.py
+index ea73549..0aaa819 100644
+--- a/yum/__init__.py
++++ b/yum/__init__.py
+@@ -2163,10 +2163,10 @@ class YumBase(depsolve.Depsolve):
+ 
+         # do the ones we already have
+         for item in sorted_lists.values():
+-            for pkg, keys, values in item:
++            for pkg, k, v in item:
+                 if pkg not in results_by_pkg:
+                     results_by_pkg[pkg] = []
+-                results_by_pkg[pkg].append((keys,values))
++                results_by_pkg[pkg].append((k,v))
+ 
+         # take our existing dict-by-pkg and make the dict-by-count for 
+         # this bizarro sorted_lists format
+@@ -2175,9 +2175,9 @@ class YumBase(depsolve.Depsolve):
+         for pkg in results_by_pkg:
+             totkeys = []
+             totvals = []
+-            for (keys, values) in results_by_pkg[pkg]:
+-                totkeys.extend(keys)
+-                totvals.extend(values)
++            for (k, v) in results_by_pkg[pkg]:
++                totkeys.extend(k)
++                totvals.extend(v)
+             
+             totkeys = misc.unique(totkeys)
+             totvals = misc.unique(totvals)

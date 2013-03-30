@@ -1,0 +1,324 @@
+commit 543344aa1346a5e3b37a6b813121f6078cfb9aa4
+Author: James Antill <james@and.org>
+Date:   Fri Apr 9 15:59:07 2010 -0400
+
+    Add dynamic yumvars from the filesystem.
+
+diff --git a/docs/yum.conf.5 b/docs/yum.conf.5
+index fe195af..54e7bf9 100644
+--- a/docs/yum.conf.5
++++ b/docs/yum.conf.5
+@@ -769,6 +769,18 @@ These will be replaced with the value of the shell environment variable of
+ the same name. If the shell environment variable does not exist then the
+ configuration file variable will not be replaced.
+ 
++.LP
++As of 3.2.28, any file in <installroot>/<persistdir>/vars is turned into
++a variable named after the filename (or overrides any of the above varaibles).
++The obvious exception is that you cannot use these variables in the definition
++of persistdir itself.
++
++Note that no warnings/errors are given if the files are unreadable, so creating
++files that only root can read may be confusing for users.
++
++Also note that all new line characters are removed, as a convienience, but no
++other checking is performed on the data. This means it's possible to have bad
++character data in baseurl etc.
+ 
+ .SH "FILES"
+ .nf
+diff --git a/yum/config.py b/yum/config.py
+index d869a26..e13eb12 100644
+--- a/yum/config.py
++++ b/yum/config.py
+@@ -857,13 +857,15 @@ def readMainConfig(startupconf):
+     yumvars['arch'] = startupconf.arch
+     yumvars['releasever'] = startupconf.releasever
+     yumvars['uuid'] = startupconf.uuid
++    # Note: We don't setup the FS yumvars here, because we want to be able to
++    #       use the core yumvars in persistdir. Which is the base of FS yumvars.
+     
+     # Read [main] section
+     yumconf = YumConf()
+     yumconf.populate(startupconf._parser, 'main')
+ 
+     # Apply the installroot to directory options
+-    for option in ('cachedir', 'logfile', 'persistdir'):
++    def _apply_installroot(yumconf, option):
+         path = getattr(yumconf, option)
+         ir_path = yumconf.installroot + path
+         ir_path = ir_path.replace('//', '/') # os.path.normpath won't fix this and
+@@ -871,6 +873,25 @@ def readMainConfig(startupconf):
+         ir_path = varReplace(ir_path, yumvars)
+         setattr(yumconf, option, ir_path)
+     
++    _apply_installroot(yumconf, 'persistdir')
++
++    # Read the FS yumvars
++    try:
++        dir_fsvars = yumconf.persistdir + "/vars/"
++        fsvars = os.listdir(dir_fsvars)
++    except OSError:
++        fsvars = []
++    for fsvar in fsvars:
++        try:
++            val = open(dir_fsvars + fsvar).read().replace('\n', '')
++        except (OSError, IOError):
++            continue
++        yumvars[fsvar] = val
++
++    # These can use the above FS yumvars
++    for option in ('cachedir', 'logfile'):
++        _apply_installroot(yumconf, option)
++
+     # Add in some extra attributes which aren't actually configuration values 
+     yumconf.yumvar = yumvars
+     yumconf.uid = 0
+commit 3ec0eb7fe87f339c71539636282c018d278d04c5
+Author: James Antill <james@and.org>
+Date:   Fri Apr 9 16:46:08 2010 -0400
+
+     Disallow symlinks, for variables (although it is root only), and tweak docs
+    
+     Add the vars directory on install, to make it easier for users.
+     Own the vars directory in the specfile.
+     Also add uuid, history, plugins and yumdb as %ghost files.
+
+diff --git a/Makefile b/Makefile
+index d75b220..f20795f 100644
+--- a/Makefile
++++ b/Makefile
+@@ -34,7 +34,7 @@ install:
+ 	install -m 755 bin/yum-updatesd.py $(DESTDIR)/usr/sbin/yum-updatesd
+ 
+ 	mkdir -p $(DESTDIR)/var/cache/yum
+-	mkdir -p $(DESTDIR)/var/lib/yum	
++	mkdir -p $(DESTDIR)/var/lib/yum/vars
+ 
+ 	for d in $(SUBDIRS); do make PYTHON=$(PYTHON) DESTDIR=`cd $(DESTDIR); pwd` -C $$d install; [ $$? = 0 ] || exit 1; done
+ 
+diff --git a/docs/yum.conf.5 b/docs/yum.conf.5
+index 54e7bf9..f4ce88d 100644
+--- a/docs/yum.conf.5
++++ b/docs/yum.conf.5
+@@ -771,16 +771,17 @@ configuration file variable will not be replaced.
+ 
+ .LP
+ As of 3.2.28, any file in <installroot>/<persistdir>/vars is turned into
+-a variable named after the filename (or overrides any of the above varaibles).
++a variable named after the filename (or overrides any of the above variables).
+ The obvious exception is that you cannot use these variables in the definition
+ of persistdir itself.
+ 
+ Note that no warnings/errors are given if the files are unreadable, so creating
+ files that only root can read may be confusing for users.
+ 
+-Also note that all new line characters are removed, as a convienience, but no
+-other checking is performed on the data. This means it's possible to have bad
+-character data in baseurl etc.
++Also note that only the first line will be read and all new line 
++characters are removed, as a convenience. However, no other checking is 
++performed on the data. This means it is possible to have bad character 
++data in any value.
+ 
+ .SH "FILES"
+ .nf
+diff --git a/yum.spec b/yum.spec
+index 3a724cd..48e5fea 100644
+--- a/yum.spec
++++ b/yum.spec
+@@ -91,6 +91,11 @@ exit 0
+ /usr/lib/python?.?/site-packages/rpmUtils
+ %dir /var/cache/yum
+ %dir /var/lib/yum
++%dir /var/lib/yum/vars
++%ghost /var/lib/yum/uuid
++%ghost /var/lib/yum/history
++%ghost /var/lib/yum/plugins
++%ghost /var/lib/yum/yumdb
+ %{_mandir}/man*/yum.*
+ %{_mandir}/man*/yum-shell*
+ 
+diff --git a/yum/config.py b/yum/config.py
+index e13eb12..ea8bcbf 100644
+--- a/yum/config.py
++++ b/yum/config.py
+@@ -882,8 +882,12 @@ def readMainConfig(startupconf):
+     except OSError:
+         fsvars = []
+     for fsvar in fsvars:
++        if os.path.link(dir_fsvars + fsvar):
++            continue
+         try:
+-            val = open(dir_fsvars + fsvar).read().replace('\n', '')
++            val = open(dir_fsvars + fsvar).readline()
++            if val and val[-1] == '\n':
++                val = val[:-1]
+         except (OSError, IOError):
+             continue
+         yumvars[fsvar] = val
+commit ade6d1655f790cc3be68eb8178d164f9c3e1cc3e
+Author: James Antill <james@and.org>
+Date:   Tue Apr 13 11:50:28 2010 -0400
+
+    Move /var/lib/yum/vars to /etc/yum/vars as it's not yum generated
+
+diff --git a/Makefile b/Makefile
+index f20795f..8065899 100644
+--- a/Makefile
++++ b/Makefile
+@@ -34,7 +34,7 @@ install:
+ 	install -m 755 bin/yum-updatesd.py $(DESTDIR)/usr/sbin/yum-updatesd
+ 
+ 	mkdir -p $(DESTDIR)/var/cache/yum
+-	mkdir -p $(DESTDIR)/var/lib/yum/vars
++	mkdir -p $(DESTDIR)/var/lib/yum
+ 
+ 	for d in $(SUBDIRS); do make PYTHON=$(PYTHON) DESTDIR=`cd $(DESTDIR); pwd` -C $$d install; [ $$? = 0 ] || exit 1; done
+ 
+diff --git a/docs/yum.conf.5 b/docs/yum.conf.5
+index f4ce88d..dfc09b7 100644
+--- a/docs/yum.conf.5
++++ b/docs/yum.conf.5
+@@ -770,10 +770,8 @@ the same name. If the shell environment variable does not exist then the
+ configuration file variable will not be replaced.
+ 
+ .LP
+-As of 3.2.28, any file in <installroot>/<persistdir>/vars is turned into
+-a variable named after the filename (or overrides any of the above variables).
+-The obvious exception is that you cannot use these variables in the definition
+-of persistdir itself.
++As of 3.2.28, any file in /etc/yum/vars is turned into a variable named after
++the filename (or overrides any of the above variables).
+ 
+ Note that no warnings/errors are given if the files are unreadable, so creating
+ files that only root can read may be confusing for users.
+diff --git a/etc/Makefile b/etc/Makefile
+index 68dd3c2..91b1791 100644
+--- a/etc/Makefile
++++ b/etc/Makefile
+@@ -9,6 +9,7 @@ clean:
+ install:
+ 	mkdir -p $(DESTDIR)/etc/yum/
+ 	mkdir -p $(DESTDIR)/etc/yum/repos.d
++	mkdir -p $(DESTDIR)/etc/yum/vars
+ 
+ 	install -m 644 yum.conf $(YUMETC)/yum.conf
+ 
+diff --git a/yum.spec b/yum.spec
+index 48e5fea..5ece693 100644
+--- a/yum.spec
++++ b/yum.spec
+@@ -80,8 +80,9 @@ exit 0
+ %doc README AUTHORS COPYING TODO INSTALL ChangeLog PLUGINS
+ %config(noreplace) %{_sysconfdir}/yum/yum.conf
+ %config(noreplace) %{_sysconfdir}/yum/version-groups.conf
+-%dir %{_sysconfdir}/%{name}
++%dir %{_sysconfdir}/yum
+ %dir %{_sysconfdir}/yum/repos.d
++%dir %{_sysconfdir}/yum/vars
+ %config %{_sysconfdir}/logrotate.d/%{name}
+ %{_sysconfdir}/bash_completion.d
+ %{_datadir}/yum-cli/*
+@@ -91,7 +92,6 @@ exit 0
+ /usr/lib/python?.?/site-packages/rpmUtils
+ %dir /var/cache/yum
+ %dir /var/lib/yum
+-%dir /var/lib/yum/vars
+ %ghost /var/lib/yum/uuid
+ %ghost /var/lib/yum/history
+ %ghost /var/lib/yum/plugins
+diff --git a/yum/config.py b/yum/config.py
+index ea8bcbf..3e91735 100644
+--- a/yum/config.py
++++ b/yum/config.py
+@@ -873,11 +873,9 @@ def readMainConfig(startupconf):
+         ir_path = varReplace(ir_path, yumvars)
+         setattr(yumconf, option, ir_path)
+     
+-    _apply_installroot(yumconf, 'persistdir')
+-
+     # Read the FS yumvars
+     try:
+-        dir_fsvars = yumconf.persistdir + "/vars/"
++        dir_fsvars = yumconf.installroot + "/etc/yum/vars/"
+         fsvars = os.listdir(dir_fsvars)
+     except OSError:
+         fsvars = []
+@@ -893,7 +891,7 @@ def readMainConfig(startupconf):
+         yumvars[fsvar] = val
+ 
+     # These can use the above FS yumvars
+-    for option in ('cachedir', 'logfile'):
++    for option in ('cachedir', 'logfile', 'persistdir'):
+         _apply_installroot(yumconf, option)
+ 
+     # Add in some extra attributes which aren't actually configuration values 
+commit 1f714fa2f00b1d92fc5636e58cf9ad97fd638b03
+Author: James Antill <james@and.org>
+Date:   Thu Apr 15 01:33:32 2010 -0400
+
+    Fix rpmdb.searchPrco() with "globs", can also affect getProvides() etc.
+
+diff --git a/yum/rpmsack.py b/yum/rpmsack.py
+index e18df3f..eba1409 100644
+--- a/yum/rpmsack.py
++++ b/yum/rpmsack.py
+@@ -322,8 +322,8 @@ class RPMDBPackageSack(PackageSackBase):
+             if not glob:
+                 if po.checkPrco(prcotype, (n, f, (e,v,r))):
+                     result[po.pkgid] = po
+-                else:
+-                    result[po.pkgid] = po
++            else:
++                result[po.pkgid] = po
+         del mi
+ 
+ 
+commit 2a9161a8b4bfc121fa8245700df355c63b58b442
+Author: James Antill <james@and.org>
+Date:   Wed Mar 31 00:12:09 2010 -0400
+
+    Should work around the reget MD problems
+
+diff --git a/yum/yumRepo.py b/yum/yumRepo.py
+index 8d7617e..b67b897 100644
+--- a/yum/yumRepo.py
++++ b/yum/yumRepo.py
+@@ -1552,9 +1552,17 @@ class YumRepository(Repository, config.RepoConf):
+         try:
+             checkfunc = (self.checkMD, (mdtype,), {})
+             text = "%s/%s" % (self.id, mdtype)
++            if thisdata.size is None:
++                reget = None
++            else:
++                reget = 'simple'
++                if os.path.exists(local):
++                    if os.stat(local).st_size >= int(thisdata.size):
++                        misc.unlink_f(local)
+             local = self._getFile(relative=remote,
+                                   local=local, 
+                                   copy_local=1,
++                                  reget=reget,
+                                   checkfunc=checkfunc, 
+                                   text=text,
+                                   cache=self.http_caching == 'all',
+commit 7f5600232c8b8027663af447ce985d37f654cc6b
+Author: James Antill <james@and.org>
+Date:   Sun Apr 25 00:46:03 2010 -0400
+
+    Fix typo s/link/islink/ on new fsvars. feature
+
+diff --git a/yum/config.py b/yum/config.py
+index 3e91735..5e1dd55 100644
+--- a/yum/config.py
++++ b/yum/config.py
+@@ -880,7 +880,7 @@ def readMainConfig(startupconf):
+     except OSError:
+         fsvars = []
+     for fsvar in fsvars:
+-        if os.path.link(dir_fsvars + fsvar):
++        if os.path.islink(dir_fsvars + fsvar):
+             continue
+         try:
+             val = open(dir_fsvars + fsvar).readline()
